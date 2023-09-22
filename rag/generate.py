@@ -17,16 +17,15 @@ from rag.index import set_index
 from rag.utils import get_credentials
 
 
+def response_stream(response):
+    for chunk in response:
+        if "content" in chunk["choices"][0]["delta"].keys():
+            yield chunk["choices"][0]["delta"]["content"]
+
+
 def prepare_response(response, stream):
     if stream:
-        answer = []
-        for chunk in response:
-            if "content" in chunk["choices"][0]["delta"].keys():
-                content = chunk["choices"][0]["delta"]["content"]
-                answer.append(content)
-                sys.stdout.write(content)
-                sys.stdout.flush()
-        return "".join([item for item in answer])
+        return response_stream(response)
     else:
         return response["choices"][-1]["message"]["content"]
 
@@ -77,9 +76,10 @@ def get_sources_and_context(query, embedding_model, num_chunks):
                 (embedding, num_chunks),
             )
             rows = cur.fetchall()
+            document_ids = [row[0] for row in rows]
             context = [{"text": row[1]} for row in rows]
             sources = [row[2] for row in rows]
-    return sources, context
+    return document_ids, sources, context
 
 
 class QueryAgent:
@@ -108,7 +108,7 @@ class QueryAgent:
 
     def __call__(self, query, num_chunks=5, stream=True):
         # Get sources and context
-        sources, context = get_sources_and_context(
+        document_ids, sources, context = get_sources_and_context(
             query=query, embedding_model=self.embedding_model, num_chunks=num_chunks
         )
 
@@ -127,6 +127,7 @@ class QueryAgent:
         result = {
             "question": query,
             "sources": sources,
+            "document_ids": document_ids,
             "answer": answer,
             "llm": self.llm,
         }
@@ -172,7 +173,7 @@ def generate_responses(
     with open(Path(references_fp), "r") as f:
         questions = [item["question"] for item in json.load(f)][:num_samples]
     for query in tqdm(questions):
-        result = agent(query=query, num_chunks=num_chunks)
+        result = agent(query=query, num_chunks=num_chunks, stream=False)
         results.append(result)
         clear_output(wait=True)
         display(JSON(json.dumps(result, indent=2)))
